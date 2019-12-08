@@ -1,0 +1,68 @@
+jsproj.com 서버 설정 가이드
+
+작성자 : koo@kormail.net
+작성일 : 2015-05-27
+최종개정일 : -
+
+1. mysql 혹은 mariadb를 설치한다.
+
+2. 아래의 쿼리를 실행하여 db를 만들고 권한을 추가한다.
+    CREATE USER 'talkuser'@'localhost' IDENTIFIED BY 'qwe123';
+    CREATE DATABASE auth;
+    GRANT ALL PRIVILEGES ON auth.* TO 'talkuser'@'%' WITH GRANT OPTION;
+    FLUSH PRIVILEGES;
+
+3. auth.cfg 수정
+    1) [database] 섹션의 auth 부분에 비밀번호와 주소를 수정한다.
+    2) [smtp] 섹션의 설정을 정확히 입력한다. 이메일 인증을 사용하지 않으려면
+       [activation] 섹션의 use=true를 true 이외의 다른 값(false 등)으로 바꾼다.
+    3) jwt를 사용하기 위해서는 rsa 키가 필요하다. 생성 방법은 아래와 같다.
+        openssl genrsa -out jsproj.com.rsa 1024
+        openssl rsa -in jsproj.com.rsa -pubout > jsproj.com.rsa.pub
+        생성한 두 파일을 적절한 곳에 복사하고 [resources] 섹션의 privatekeyfile과 publickeyfile을 고친다.
+    4) [server] 섹션의 bind 주소와 포트를 지정한다. 주소는 127.0.0.1이면 로컬 호스트만 접속 가능하며 0.0.0.0이면 외부 접속 가능하다.
+       test서버인 경우 [server] 섹션의 test=true로 설정한다. 그렇게 하면 debug 로그가 남는다.
+
+4. nginx 설정
+ - 성능 및 리소스에 따라 프로세스 수와 커넥션 수를 적절히 조절할것
+ - 외부에서는 https 3334 포트로 받아서 내부에는 http 3333 포트로 포워딩 설정
+ - ssl_certificate와 key는 아래와 같은 방법으로 발급 후 해당 경로를 nginx.conf에 넣어줘야 한다.
+   cd ~/.ssh
+   openssl req -new -newkey rsa:2048 -nodes -keyout jsproj.com.key -out jsproj.com.csr
+   openssl x509 -req -days 365 -in jsproj.com.csr -signkey jsproj.com.key -out jsproj.com.crt
+   cp jsproj.com.key jsproj.com.key.secure
+   openssl rsa -in jsproj.com.key.secure -out jsproj.com.key
+
+  - nginx.conf 예제
+--------------------------------------------------------------------------------
+worker_processes  1;
+events {
+    worker_connections  1024;
+}
+
+http {
+    upstream auth {
+        server 127.0.0.1:3333;
+    }
+
+    server {
+        listen               *:3334 ssl;
+        server_name          localhost;
+        ssl_certificate      /Users/koo/.ssh/jsproj.com.crt;
+        ssl_certificate_key  /Users/koo/.ssh/jsproj.com.key;
+        ssl_session_cache    shared:SSL:1m;
+        ssl_session_timeout  5m;
+        ssl_protocols        SSLv2 SSLv3 TLSv1;
+        ssl_ciphers          ALL:!ADH:!EXPORT56:RC4+RSA:+HIGH:+MEDIUM:+LOW:+SSLv2:+EXP;
+        ssl_prefer_server_ciphers   on;
+
+        location / {
+            proxy_pass http://auth;
+            proxy_set_header    X-Real-IP           $remote_addr;
+            proxy_set_header    X-Forwarded-For     $proxy_add_x_forwarded_for;
+            proxy_set_header    X-Server-Address    $server_addr;
+            proxy_set_header    Host                $host;
+        }
+    }
+}
+--------------------------------------------------------------------------------
